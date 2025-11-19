@@ -36,6 +36,8 @@ export const MAX_OPEN_POSITIONS = 'MAX_OPEN_POSITIONS';
 export const TP_PERCENT = 'TP_PERCENT';
 export const PREDICTION_UPDATE_INTERVAL_MS = 'PREDICTION_UPDATE_INTERVAL_MS';
 export const IN_POSITION_CHECK_INTERVAL_MS = 'IN_POSITION_CHECK_INTERVAL_MS';
+export const WINDOW_TIMEOUT_BEFORE_END_MS = 'WINDOW_TIMEOUT_BEFORE_END_MS';
+export const PAUSE_AFTER_CONSECUTIVE_LOSSES_MS = 'PAUSE_AFTER_CONSECUTIVE_LOSSES_MS';
 
 @Injectable()
 export class AppConfigService {
@@ -159,6 +161,14 @@ export class AppConfigService {
 
   public inPositionCheckInterval(): number {
     return parseFloat(this.configService.get(IN_POSITION_CHECK_INTERVAL_MS));
+  }
+
+  public windowTimeoutBeforeEnd(): number {
+    return parseFloat(this.configService.get(WINDOW_TIMEOUT_BEFORE_END_MS));
+  }
+
+  public pauseAfterConsecutiveLosses(): number {
+    return parseFloat(this.configService.get(PAUSE_AFTER_CONSECUTIVE_LOSSES_MS));
   }
 
   public tpPercent(): number {

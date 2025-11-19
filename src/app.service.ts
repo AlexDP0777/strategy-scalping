@@ -18,6 +18,11 @@ export class AppService {
   private predictionUpdateIntervalId: NodeJS.Timeout;
   private inPositionCheckIntervalId: NodeJS.Timeout;
 
+  // New fields for window timeout and consecutive losses
+  private lastPredictionTime: number = 0;
+  private consecutiveLosses: number = 0;
+  private pauseUntil: number = 0;
+
   constructor(
     private readonly appConfigService: AppConfigService,
     private readonly binanceService: BinanceService,
@@ -49,6 +54,7 @@ export class AppService {
     if (!this.predictionUpdateIntervalId) {
       this.predictionUpdateIntervalId = setInterval(async () => {
         await this.riskModuleService.updateData();
+        this.lastPredictionTime = Date.now();
       }, this.predictionUpdateMs);
     }
 
@@ -62,7 +68,7 @@ export class AppService {
   async refresh(): Promise<void> {
     const price = this.binanceService.getCurrentPrice();
 
-    if (price) {
+    if (!price) {
       return;
     }
 
@@ -71,8 +77,14 @@ export class AppService {
     this.riskModuleService.updatePosition(price);
     const currentPositionsCount = this.binanceService.openedPositions;
 
+    // Check if we need to force close positions due to window timeout
+    await this.checkForceCloseOnTimeout(price);
+
     if (currentPositionsCount > previousPositionsCount) {
       await this.monitorPosition(price);
+    } else if (currentPositionsCount < previousPositionsCount) {
+      // Position was closed - check if it was a loss
+      await this.handlePositionClosed(price);
     } else {
       await this.checkEntryConditions(price);
     }
@@ -94,6 +106,18 @@ export class AppService {
       return;
     }
 
+    // Check if we're in pause after consecutive losses
+    if (this.isPaused()) {
+      console.log('Trading paused due to consecutive losses');
+      return;
+    }
+
+    // Check window timeout - don't open new positions near end of window
+    if (this.isNearWindowEnd()) {
+      console.log('Near end of prediction window, not opening new positions');
+      return;
+    }
+
     const minProbability = this.appConfigService.minProbability();
 
     if (this.riskModuleService.probability < minProbability) {
@@ -106,12 +130,121 @@ export class AppService {
 
     const position = this.riskModuleService.position;
     const entryLong = this.appConfigService.entryLong();
-    const entryShort = this.appConfigService.entryLong();
+    const entryShort = this.appConfigService.entryShort();
 
     if (position <= entryLong) {
       await this.openLongPosition(price);
     } else if (position >= entryShort) {
       await this.openShortPosition(price);
+    }
+  }
+
+  private isNearWindowEnd(): boolean {
+    if (this.lastPredictionTime === 0) {
+      return false;
+    }
+
+    const timeframeMs = this.appConfigService.timeFrame() * 60 * 1000;
+    const timeoutBeforeEnd = this.appConfigService.windowTimeoutBeforeEnd();
+    const elapsed = Date.now() - this.lastPredictionTime;
+    const remaining = timeframeMs - elapsed;
+
+    return remaining <= timeoutBeforeEnd;
+  }
+
+  private isPaused(): boolean {
+    return Date.now() < this.pauseUntil;
+  }
+
+  async checkForceCloseOnTimeout(price: number): Promise<void> {
+    if (this.lastPredictionTime === 0) {
+      return;
+    }
+
+    const timeframeMs = this.appConfigService.timeFrame() * 60 * 1000;
+    const elapsed = Date.now() - this.lastPredictionTime;
+
+    if (elapsed >= timeframeMs && this.binanceService.openedPositions > 0) {
+      console.log('Window expired, force closing positions');
+      await this.forceCloseAllPositions(price);
+    }
+  }
+
+  async forceCloseAllPositions(price: number): Promise<void> {
+    const position = this.binanceService.getPosition();
+    if (!position) {
+      return;
+    }
+
+    const positionAmt = parseFloat(position.positionAmt);
+    if (positionAmt === 0) {
+      return;
+    }
+
+    try {
+      const side = positionAmt > 0 ? 'SELL' : 'BUY';
+      await this.binanceService.createOrder({
+        symbol: this.appConfigService.tokenPair().toLowerCase(),
+        side: side,
+        type: 'MARKET',
+        quantity: Math.abs(positionAmt),
+      });
+
+      console.log('Force closed position due to window timeout');
+
+      await OperationsEntity.update(
+        {
+          active: 0,
+          lowerBoundClose: this.riskModuleService.lowerBound,
+          upperBoundClose: this.riskModuleService.upperBound,
+          dateClose: new Date(),
+          priceClose: price,
+        },
+        {
+          where: {
+            active: 1,
+          },
+        },
+      );
+    } catch (error) {
+      console.error('Failed to force close position:', error);
+    }
+  }
+
+  async handlePositionClosed(price: number): Promise<void> {
+    const lastOperation = await OperationsEntity.findOne({
+      where: { active: 0 },
+      order: [['dateClose', 'DESC']],
+    });
+
+    if (lastOperation) {
+      const pnl = this.calculatePnL(lastOperation, price);
+      
+      if (pnl < 0) {
+        this.consecutiveLosses++;
+        console.log('Consecutive losses: ' + this.consecutiveLosses);
+
+        const maxConsecutiveLoss = this.appConfigService.maxConsecutiveLoss();
+        if (this.consecutiveLosses >= maxConsecutiveLoss) {
+          const pauseDuration = this.appConfigService.pauseAfterConsecutiveLosses();
+          this.pauseUntil = Date.now() + pauseDuration;
+          console.log('Pausing trading for ' + (pauseDuration / 1000) + ' seconds');
+          this.consecutiveLosses = 0;
+        }
+      } else {
+        this.consecutiveLosses = 0;
+      }
+    }
+  }
+
+  private calculatePnL(operation: any, closePrice: number): number {
+    const openPrice = operation.priceOpen;
+    const positionSize = operation.positionSize;
+    
+    if (operation.type === OperationType.Long) {
+      return (closePrice - openPrice) * positionSize;
+    } else {
+      return (openPrice - closePrice) * positionSize;
     }
   }
 
@@ -231,6 +364,16 @@ export class AppService {
 
   async stop(): Promise<void> {
     this.status = OperationStatus.Stop;
+    
+    if (this.predictionUpdateIntervalId) {
+      clearInterval(this.predictionUpdateIntervalId);
+      this.predictionUpdateIntervalId = null;
+    }
+    
+    if (this.inPositionCheckIntervalId) {
+      clearInterval(this.inPositionCheckIntervalId);
+      this.inPositionCheckIntervalId = null;
+    }
   }
 
   async calculateTpPrice(type: OperationType, price: number): Promise<number> {
