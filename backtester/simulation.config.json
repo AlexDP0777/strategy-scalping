@@ -1,0 +1,31 @@
+{
+  "// ПАРАМЕТРЫ СИМУЛЯЦИИ": "Редактируй здесь, не трогая код",
+
+  "range": 0.005,
+  "cycleTime": 10,
+  "entryLong": 0.33,
+  "entryShort": 0.67,
+  "minProbability": 0.95,
+  "lockBeforeEnd": 180,
+  "closeStrategy": "cycle_timeout",
+
+  "// TP СТРАТЕГИЯ": "midpoint | fixed_percent | fixed_rr",
+  "tpStrategy": "fixed_percent",
+  "tpPercent": 0.35,
+  "tpRiskReward": 2,
+
+  "// ПЕРИОД": "YYYY-MM-DD",
+  "fromDate": "2025-09-05",
+  "toDate": "2025-09-11",
+
+  "// RM": "true = реальный API, false = заглушка",
+  "useRealRM": true,
+  "rmStubProbability": 0.96,
+
+  "// РАЗМЕР ПОЗИЦИИ И ПЛЕЧО": "маржа × плечо = размер позиции",
+  "positionSize": 0.5,
+  "leverage": 3,
+
+  "// DEBUG": "показывать отладку",
+  "debug": true
+}

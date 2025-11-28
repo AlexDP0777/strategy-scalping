@@ -1,0 +1,13 @@
+{
+  "name": "strategy-backtester",
+  "version": "1.0.0",
+  "description": "Backtester for scalping strategy with RM integration",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node src/index.js --test"
+  },
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  }
+}
